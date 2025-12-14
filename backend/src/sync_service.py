@@ -7,11 +7,23 @@ import argparse
 import requests
 import msal
 
+# ===== path fixes: resolve paths relative to the repository root (./project) =====
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# repo root is two levels up from src/ (./project)
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+
+# ensure local imports work regardless of current working directory
+sys.path.insert(0, SCRIPT_DIR)
+
+# Import SyncDB from local module
 from sync_db import SyncDB
 
-DB_PATH = "/opt/thalamind/db/sync.db"
+DB_PATH = "/project/backend/db/sync.db"
 BASE_ROOT = "/opt/thalamind"
-CREDENTIALS_FILE = "/opt/thalamind/app_credentials.json"
+
+# app_credentials.json lives inside the backend directory per your note
+CREDENTIALS_FILE = os.path.join(PROJECT_ROOT, "backend", "app_credentials.json")
+# =====================================================================
 
 with open(CREDENTIALS_FILE) as f:
     CRED = json.load(f)

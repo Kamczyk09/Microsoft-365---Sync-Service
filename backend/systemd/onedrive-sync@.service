@@ -1,0 +1,14 @@
+[Unit]
+Description=OneDrive Sync Service for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=thala_user
+Group=thala_user
+WorkingDirectory=/project
+ExecStart=/project/backend/.venv/bin/python /project/backend/src/sync_service.py --sync %i
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
