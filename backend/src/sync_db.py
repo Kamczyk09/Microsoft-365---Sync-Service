@@ -147,3 +147,20 @@ class SyncDB:
         self.conn.commit()
 
         return ids, paths
+    
+        # ---------------- API HELPERS ----------------
+
+    def list_users(self):
+        cur = self.conn.execute("""
+        SELECT
+            u.id,
+            u.email,
+            u.display_name,
+            u.expires_at,
+            MAX(d.last_seen) AS last_sync,
+            COUNT(d.id) AS item_count
+        FROM users u
+        LEFT JOIN drive_items d ON d.user_id = u.id
+        GROUP BY u.id
+        """)
+        return [dict(row) for row in cur.fetchall()]
