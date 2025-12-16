@@ -44,6 +44,10 @@ class AuthManager:
     def __init__(self, db: SyncDB):
         self.db = db
         self.app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
+        self.CLIENT_ID = CLIENT_ID
+        self.TENANT_ID = TENANT_ID
+        self.SCOPES = SCOPES
+
 
     def device_code_flow(self):
         flow = self.app.initiate_device_flow(scopes=SCOPES)
