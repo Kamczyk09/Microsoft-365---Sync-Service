@@ -69,13 +69,23 @@ def ms_login_callback(request: Request, code: str, background_tasks: BackgroundT
     token_url = f"https://login.microsoftonline.com/{auth_manager.TENANT_ID}/oauth2/v2.0/token"
     data = {
         "client_id": auth_manager.CLIENT_ID,
+        "client_secret": auth_manager.CLIENT_SECRET,
         "scope": " ".join(auth_manager.SCOPES),
         "code": code,
         "redirect_uri": "http://46.62.236.228:3000/auth/callback",
         "grant_type": "authorization_code",
     }
     r = requests.post(token_url, data=data)
-    r.raise_for_status()
+
+    if not r.ok:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Token exchange failed",
+                "details": r.text
+            }
+        )
+
     tokens = r.json()
 
     # Get user info from Graph

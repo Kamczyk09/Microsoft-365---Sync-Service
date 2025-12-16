@@ -1,4 +1,4 @@
-// src/app/auth/callback/page.tsx
+ // src/app/auth/callback/page.tsx
 "use client";  // MUST be first line
 
 import { useEffect } from "react";

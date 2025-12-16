@@ -29,6 +29,7 @@ with open(CREDENTIALS_FILE) as f:
     CRED = json.load(f)
 
 CLIENT_ID = CRED["CLIENT_ID"]
+CLIENT_SECRET = CRED["CLIENT_SECRET"]
 TENANT_ID = CRED["TENANT_ID"]
 SCOPES = CRED.get("SCOPES", ["Files.Read.All", "offline_access", "User.Read"])
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
@@ -45,6 +46,7 @@ class AuthManager:
         self.db = db
         self.app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
         self.CLIENT_ID = CLIENT_ID
+        self.CLIENT_SECRET = CLIENT_SECRET
         self.TENANT_ID = TENANT_ID
         self.SCOPES = SCOPES
 
