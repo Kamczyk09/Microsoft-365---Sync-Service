@@ -27,8 +27,10 @@ export default function HomePage() {
   async function handleSignIn() {
     const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/auth/mslogin/url`);
     const data = await res.json();
-    window.location.href = data.url;  // redirect to Microsoft login
+    // Redirect user to Microsoft login page
+    window.location.href = data.url;
   }
+
 
   return (
     <main style={{ padding: "2rem" }}>

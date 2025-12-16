@@ -6,3 +6,4 @@ testing.py
 docs
 .idea
 backend/app_credentials.json
+testing.py

@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List, Tuple
 
 class SyncDB:
     def __init__(self, path: str):
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -26,7 +26,7 @@ class SyncDB:
 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS drive_items (
-            id TEXT PRIMARY KEY,
+            id TEXT,
             user_id TEXT,
             name TEXT,
             folder INTEGER,
@@ -37,9 +37,21 @@ class SyncDB:
             etag TEXT,
             created_at_utc TEXT,
             modified_at_utc TEXT,
-            last_seen INTEGER
+            last_seen INTEGER,
+            PRIMARY KEY (id, user_id)
         )
         """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS sync_status
+        (
+            user_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL, -- idle | running | error
+            last_started INTEGER,
+            last_finished INTEGER,
+            last_error TEXT
+                    )
+                    """)
 
         self.conn.commit()
 
@@ -64,6 +76,11 @@ class SyncDB:
             expires_at=excluded.expires_at,
             display_name=excluded.display_name
         """, (id, ms_user_id, email, display_name, access_token, refresh_token, expires_at))
+        self.conn.execute("""
+                          INSERT
+                          OR IGNORE INTO sync_status(user_id, state)
+        VALUES (?, 'idle')
+                          """, (id,))
         self.conn.commit()
 
     def get_user(self, id: str) -> Optional[Dict[str, Any]]:
@@ -92,28 +109,30 @@ class SyncDB:
 
         # 1. Check existing local_path before upsert
         cur = self.conn.execute(
-            "SELECT local_path FROM drive_items WHERE id = ?",
-            (item["id"],)
+            "SELECT local_path FROM drive_items WHERE id = ? AND user_id = ?",
+            (item["id"], user_id)
         )
         existing_row = cur.fetchone()
         old_local_path = existing_row["local_path"] if existing_row else None
 
         # 2. Perform the upsert operation (as you already have it)
         self.conn.execute("""
-                          INSERT INTO drive_items(id, user_id, name, folder, size, parent_id,
-                                                  microsoft_path, local_path, etag,
-                                                  created_at_utc, modified_at_utc, last_seen)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO
-                          UPDATE SET
-                              name=excluded.name,
-                              folder=excluded.folder,
-                              size =excluded.size,
-                              parent_id=excluded.parent_id,
-                              microsoft_path=excluded.microsoft_path,
-                              local_path=excluded.local_path,
-                              etag=excluded.etag,
-                              modified_at_utc=excluded.modified_at_utc,
-                              last_seen=excluded.last_seen
+                                                  INSERT INTO drive_items(
+                            id, user_id, name, folder, size, parent_id,
+                            microsoft_path, local_path, etag,
+                            created_at_utc, modified_at_utc, last_seen
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id, user_id) DO UPDATE SET
+                            name=excluded.name,
+                            folder=excluded.folder,
+                            size=excluded.size,
+                            parent_id=excluded.parent_id,
+                            microsoft_path=excluded.microsoft_path,
+                            local_path=excluded.local_path,
+                            etag=excluded.etag,
+                            modified_at_utc=excluded.modified_at_utc,
+                            last_seen=excluded.last_seen
                           """, (
                               item["id"], user_id, item["name"], int(item["folder"]),
                               item["size"], item["parent_id"],
@@ -152,15 +171,66 @@ class SyncDB:
 
     def list_users(self):
         cur = self.conn.execute("""
-        SELECT
-            u.id,
-            u.email,
-            u.display_name,
-            u.expires_at,
-            MAX(d.last_seen) AS last_sync,
-            COUNT(d.id) AS item_count
-        FROM users u
-        LEFT JOIN drive_items d ON d.user_id = u.id
-        GROUP BY u.id
-        """)
+                                SELECT u.id,
+                                       u.email,
+                                       u.display_name,
+                                       u.expires_at,
+                                       s.state     AS sync_state,
+                                       s.last_started,
+                                       s.last_finished,
+                                       s.last_error,
+                                       COUNT(d.id) AS item_count
+                                FROM users u
+                                         LEFT JOIN drive_items d ON d.user_id = u.id
+                                         LEFT JOIN sync_status s ON s.user_id = u.id
+                                GROUP BY u.id
+                                """)
         return [dict(row) for row in cur.fetchall()]
+
+    # ---------------- SYNC STATUS ----------------
+
+    def set_sync_state(
+            self,
+            user_id: str,
+            state: str,
+            error: Optional[str] = None
+    ):
+        now = int(time.time())
+
+        if state == "running":
+            self.conn.execute("""
+                              INSERT INTO sync_status(user_id, state, last_started)
+                              VALUES (?, ?, ?) ON CONFLICT(user_id) DO
+                              UPDATE SET
+                                  state=excluded.state,
+                                  last_started=excluded.last_started,
+                                  last_error= NULL
+                              """, (user_id, state, now))
+
+        elif state == "idle":
+            self.conn.execute("""
+                              UPDATE sync_status
+                              SET state=?,
+                                  last_finished=?
+                              WHERE user_id = ?
+                              """, (state, now, user_id))
+
+        elif state == "error":
+            self.conn.execute("""
+                              UPDATE sync_status
+                              SET state=?,
+                                  last_finished=?,
+                                  last_error=?
+                              WHERE user_id = ?
+                              """, (state, now, error, user_id))
+
+        self.conn.commit()
+
+    def get_sync_status(self, user_id: str) -> Optional[Dict[str, Any]]:
+        cur = self.conn.execute(
+            "SELECT * FROM sync_status WHERE user_id = ?",
+            (user_id,)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+

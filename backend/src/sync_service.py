@@ -5,7 +5,6 @@ import json
 import time
 import argparse
 import requests
-import msal
 
 # ===== path fixes: resolve paths relative to the repository root (./project) =====
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,47 +43,24 @@ def log(msg: str):
 class AuthManager:
     def __init__(self, db: SyncDB):
         self.db = db
-        self.app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
         self.CLIENT_ID = CLIENT_ID
         self.CLIENT_SECRET = CLIENT_SECRET
         self.TENANT_ID = TENANT_ID
         self.SCOPES = SCOPES
 
-
-    def device_code_flow(self):
-        flow = self.app.initiate_device_flow(scopes=SCOPES)
-        print(flow["message"])
-        result = self.app.acquire_token_by_device_flow(flow)
-
-        claims = result["id_token_claims"]
-        email = claims.get("preferred_username")
-        display_name = claims.get("name") or email
-
-        expires_at = int(time.time()) + int(result["expires_in"])
-
-        self.db.upsert_user(
-            id=email,
-            ms_user_id=claims.get("oid"),
-            email=email,
-            display_name=display_name,
-            access_token=result["access_token"],
-            refresh_token=result["refresh_token"],
-            expires_at=expires_at
-        )
-
-        return email, display_name
-
     def refresh_token(self, user_id: str) -> str:
         user = self.db.get_user(user_id)
+
         payload = {
-            "client_id": CLIENT_ID,
+            "client_id": self.CLIENT_ID,
+            "client_secret": self.CLIENT_SECRET,
             "grant_type": "refresh_token",
             "refresh_token": user["refresh_token"],
-            "scope": " ".join(SCOPES)
+            "scope": " ".join(self.SCOPES)
         }
 
         r = requests.post(
-            f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token",
+            f"https://login.microsoftonline.com/{self.TENANT_ID}/oauth2/v2.0/token",
             data=payload
         )
         r.raise_for_status()
@@ -103,6 +79,7 @@ class AuthManager:
         )
 
         return data["access_token"]
+
 
 
 # ---------------- GRAPH ----------------
@@ -134,9 +111,10 @@ def local_path(base, item):
 
 def download(token, item, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
+
     url = item["@microsoft.graph.downloadUrl"]
-    r = requests.get(url, stream=True)
-    r.raise_for_status()
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()   # <- this is the key line
 
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
@@ -144,6 +122,7 @@ def download(token, item, path):
             f.write(c)
 
     os.replace(tmp, path)
+
 
 
 def safe_local_remove(path: str):
@@ -173,20 +152,46 @@ class OneDriveSyncCore:
         self.auth = auth
 
     def sync_user(self, user_id: str):
-        user = self.db.get_user(user_id)
-        token = user["access_token"]
-        if time.time() > user["expires_at"] - 60:
-            token = self.auth.refresh_token(user_id)
 
-        base_dir = os.path.join(BASE_ROOT, user["display_name"], "onedrive")
-        os.makedirs(base_dir, exist_ok=True)
+        status = self.db.get_sync_status(user_id)
+        if status and status["state"] == "running":
+            log("Sync already running, skipping")
+            return
 
-        if not self.db.has_any_items(user_id):
-            log("FIRST FULL SYNC")
-            self.full_sync(token, user_id, base_dir)
-        else:
-            log("INCREMENTAL SYNC")
-            self.incremental_sync(token, user_id, base_dir)
+        self.db.set_sync_state(user_id, "running")
+
+        try:
+            user = self.db.get_user(user_id)
+            token = user["access_token"]
+
+            if time.time() > user["expires_at"] - 60:
+                token = self.auth.refresh_token(user_id)
+
+            base_dir = os.path.join(BASE_ROOT, user["ms_user_id"], "onedrive")
+            os.makedirs(base_dir, exist_ok=True)
+
+            if not self.db.has_any_items(user_id):
+                self.full_sync(token, user_id, base_dir)
+            else:
+                self.incremental_sync(token, user_id, base_dir)
+
+            self.db.set_sync_state(user_id, "idle")
+
+        except requests.HTTPError as e:
+            # 🔴 THIS IS THE PART YOU WERE ASKING ABOUT
+            if e.response is not None and e.response.status_code == 401:
+                self.db.set_sync_state(
+                    user_id,
+                    "error",
+                    "Token expired, revoked, or consent removed"
+                )
+            else:
+                self.db.set_sync_state(user_id, "error", str(e))
+            raise
+
+        except Exception as e:
+            self.db.set_sync_state(user_id, "error", str(e))
+            raise
 
     def full_sync(self, token, user_id, base_dir):
         # 1. Prepare for detection of deleted items
@@ -239,7 +244,6 @@ class OneDriveSyncCore:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--authenticate", action="store_true")
     parser.add_argument("--sync")
     args = parser.parse_args()
 
@@ -249,16 +253,12 @@ def main():
     auth = AuthManager(db)
     core = OneDriveSyncCore(db, auth)
 
-    if args.authenticate:
-        uid, name = auth.device_code_flow()
-        log(f"Authenticated {name} ({uid})")
-        return
-
     if args.sync:
         core.sync_user(args.sync)
         return
 
     parser.print_help()
+
 
 
 if __name__ == "__main__":
