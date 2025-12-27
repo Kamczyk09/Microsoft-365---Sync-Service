@@ -1,9 +1,8 @@
 .venv
 state
 thalamind_backend
-backend/app_credentials.json
+#backend/app_credentials.json
 testing.py
 docs
 .idea
-backend/app_credentials.json
 testing.py
